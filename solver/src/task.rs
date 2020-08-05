@@ -47,14 +47,12 @@ impl<'a> Task<'a> {
             .variable_to_expr_map
             .iter()
             .map(|(k, v)| {
-                let k = self.evaluator.get_val(TypedSymbol::Variable(*k));
-                let v: &TypedExpr = self.evaluator.typing(&v).unwrap();
-                (k, (false, v))
+                let v = self.evaluator.typing(&v).unwrap();
+                (*k, v)
             })
             .collect();
         let target_expr = self.evaluator.typing(&self.target).unwrap();
-        let e = self.evaluator.eval(target_expr, &mut env).unwrap();
-        self.evaluator.peel(&e, &mut env)
+        self.evaluator.eval2(target_expr, &env).unwrap()
     }
 
     fn string_to_symbols(s: &str, target: &str) -> Vec<Symbol> {

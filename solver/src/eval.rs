@@ -66,26 +66,30 @@ impl<'a> Evaluator<'a> {
     pub fn peel(
         &'a self,
         expr: ExprNode<'a>,
-        mut env: &mut HashMap<ExprNode<'a>, (bool, ExprNode<'a>)>,
-    ) -> ExprNode<'a> {
+        vars: &HashMap<i128, ExprNode<'a>>,
+        env: &mut HashMap<TypedExpr<'a>, ExprNode<'a>>,
+    ) -> Result<ExprNode, EvalError> {
         use TypedExpr::*;
         use TypedSymbol::*;
-        if let Some((true, evaluated)) = env.get(&expr) {
-            return evaluated;
+        if let Some(evaluated) = env.get(&expr) {
+            return Ok(evaluated);
         }
-        match expr {
+        let result = match expr {
             Val(Cons(xs)) => {
                 let args = xs
                     .iter()
-                    .map(|x| {
-                        let e = self.eval(&x, &mut env).unwrap();
-                        self.peel(e, &mut env)
+                    .map(|&x| {
+                        let e = self.eval(x, vars, env).unwrap();
+                        let result = self.peel(e, vars, env).unwrap();
+                        result
                     })
                     .collect();
                 self.get_val(Cons(args))
             }
             _ => expr,
-        }
+        };
+        env.insert(expr.clone(), result);
+        Ok(result)
     }
 
     pub fn get_cons(&'a self, e1: ExprNode<'a>, e2: ExprNode<'a>) -> ExprNode<'a> {
@@ -93,52 +97,65 @@ impl<'a> Evaluator<'a> {
         self.exprs.alloc(TypedExpr::Apply(e3, e2))
     }
 
-    pub fn eval(
+    pub fn eval2(
         &'a self,
         expr: ExprNode<'a>,
-        mut env: &mut HashMap<ExprNode<'a>, (bool, ExprNode<'a>)>,
+        vars: &HashMap<i128, ExprNode<'a>>,
+    ) -> Result<ExprNode, EvalError> {
+        let mut env = HashMap::new();
+        let expr = self.eval(expr, vars, &mut env)?;
+        self.peel(expr, vars, &mut env)
+    }
+
+    fn eval(
+        &'a self,
+        expr: ExprNode<'a>,
+        vars: &HashMap<i128, ExprNode<'a>>,
+        env: &mut HashMap<TypedExpr<'a>, ExprNode<'a>>,
     ) -> Result<ExprNode, EvalError> {
         use EvalError::*;
         use TypedExpr::*;
         use TypedSymbol::*;
 
-        if let Some((true, evaluated)) = env.get(&expr) {
+        // println!("evaluating {:?}", expr);
+
+        if let Some(evaluated) = env.get(&expr) {
+            // println!("memo worked for {:?}", expr);
             return Ok(evaluated);
         }
 
         match expr {
             Val(Variable(i)) => {
-                let body = env.get(&expr).ok_or(UndefinedVariable(*i))?.1;
-                let body = self.eval(body, &mut env)?;
-                env.insert(expr, (true, body));
+                let body = vars.get(&i).ok_or(UndefinedVariable(*i))?;
+                let body = self.eval(body, vars, env)?;
+                // env.insert(expr.clone(), body);
                 Ok(body)
             }
             Val(_) => Ok(expr),
             Apply(f, x) => {
-                let f = self.eval(f, env)?;
-                let func = self.eval(f, env)?;
-                env.insert(f, (true, func));
-                match f {
+                let func = self.eval(f, vars, env)?;
+                match func {
                     // Car
                     Val(Car) => {
                         // ap car x   =   ap x t
                         let v = self.get_app(*x, T);
-                        let res = self.eval(v, env)?;
-                        env.insert(v, (true, res));
+                        let res = self.eval(v, vars, env)?;
+                        // env.insert(expr.clone(), res);
                         Ok(res)
                     }
                     // Cdr
                     Val(Cdr) => {
                         // ap cdr x2   =   ap x2 f
                         let v = self.get_app(*x, F);
-                        self.eval(v, env)
+                        let res = self.eval(v, vars, env)?;
+                        // env.insert(expr.clone(), res);
+                        Ok(res)
                     }
                     // Cons
                     Val(Cons(xs)) if xs.len() == 2 => {
                         // ap ap ap cons x0 x1 x2   =   ap ap x2 x0 x1
                         let v = self.get_app(self.get_app(*x, xs[0]), xs[1]);
-                        let res = self.eval(v, env)?;
-                        env.insert(v, (true, res));
+                        let res = self.eval(v, vars, env)?;
                         Ok(res)
                     }
                     Val(Cons(xs)) => {
@@ -150,8 +167,8 @@ impl<'a> Evaluator<'a> {
                     Val(BComb(xs)) if xs.len() == 2 => {
                         // ap ap ap b x0 x1 x2   =   ap x0 ap x1 x2
                         let v = self.get_app(xs[0], self.get_app(xs[1], *x));
-                        let res = self.eval(v, env)?;
-                        env.insert(v, (true, res));
+                        let res = self.eval(v, vars, env)?;
+                        env.insert(expr.clone(), res);
                         Ok(res)
                     }
                     Val(BComb(xs)) => {
@@ -164,8 +181,8 @@ impl<'a> Evaluator<'a> {
                     Val(CComb(xs)) if xs.len() == 2 => {
                         // ap ap ap c x0 x1 x2   =   ap ap x0 x2 x1
                         let v = self.get_app(self.get_app(xs[0], *x), xs[1]);
-                        let res = self.eval(v, env)?;
-                        env.insert(v, (true, res));
+                        let res = self.eval(v, vars, env)?;
+                        env.insert(expr.clone(), res);
                         Ok(res)
                     }
                     Val(CComb(xs)) => {
@@ -178,8 +195,8 @@ impl<'a> Evaluator<'a> {
                     Val(SComb(xs)) if xs.len() == 2 => {
                         // ap ap ap s x0 x1 x2   =   ap ap x0 x2 ap x1 x2
                         let v = self.get_app(self.get_app(xs[0], *x), self.get_app(xs[1], *x));
-                        let res = self.eval(v, env)?;
-                        env.insert(v, (true, res));
+                        let res = self.eval(v, vars, env)?;
+                        // env.insert(expr.clone(), res);
                         Ok(res)
                     }
                     Val(SComb(xs)) => {
@@ -191,13 +208,13 @@ impl<'a> Evaluator<'a> {
                     // I-Combinator
                     Val(IComb) => {
                         // ap i x0   =   x0
-                        self.eval(*x, env)
+                        self.eval(*x, vars, env)
                     }
                     // True
                     Val(True(xs)) if xs.len() == 1 => {
                         // ap ap t x0 x1   =   x0
                         let x0 = xs[0];
-                        self.eval(x0, env)
+                        self.eval(x0, vars, env)
                     }
                     Val(True(xs)) => {
                         assert_eq!(xs.len(), 0);
@@ -208,7 +225,7 @@ impl<'a> Evaluator<'a> {
                     // False
                     Val(False(xs)) if xs.len() == 1 => {
                         // ap ap f x0 x1   =   x1
-                        self.eval(*x, env)
+                        self.eval(*x, vars, env)
                     }
                     Val(False(xs)) => {
                         assert_eq!(xs.len(), 0);
@@ -218,8 +235,8 @@ impl<'a> Evaluator<'a> {
                     }
                     // Sum (Add)
                     Val(Sum(xs)) if xs.len() == 1 => {
-                        let x0 = self.eval(xs[0], env)?.get_number().unwrap();
-                        let x1 = self.eval(*x, env)?.get_number().unwrap();
+                        let x0 = self.eval(xs[0], vars, env)?.get_number().unwrap();
+                        let x1 = self.eval(*x, vars, env)?.get_number().unwrap();
                         Ok(self.get_val(Number(x0 + x1)))
                     }
                     Val(Sum(xs)) => {
@@ -229,9 +246,11 @@ impl<'a> Evaluator<'a> {
                     }
                     // Product
                     Val(Prod(xs)) if xs.len() == 1 => {
-                        let x0 = self.eval(xs[0], env)?.get_number().unwrap();
-                        let x1 = self.eval(*x, env)?.get_number().unwrap();
-                        Ok(self.get_val(Number(x0 * x1)))
+                        let x0 = self.eval(xs[0], vars, env)?.get_number().unwrap();
+                        let x1 = self.eval(*x, vars, env)?.get_number().unwrap();
+                        let result = self.get_val(Number(x0 * x1));
+                        env.insert(expr.clone(), result);
+                        Ok(result)
                     }
                     Val(Prod(xs)) => {
                         assert_eq!(xs.len(), 0);
@@ -239,15 +258,17 @@ impl<'a> Evaluator<'a> {
                         Ok(self.get_val(Prod(args)))
                     }
                     Val(Neg) => {
-                        let x = self.eval(*x, env)?;
+                        let x = self.eval(*x, vars, env)?;
                         let x = x.get_number().unwrap();
                         Ok(self.get_val(Number(-x)))
                     }
                     // Div
                     Val(Div(xs)) if xs.len() == 1 => {
-                        let x_num = self.eval(xs[0], env)?.get_number().unwrap();
-                        let x_den = self.eval(*x, env)?.get_number().unwrap();
-                        Ok(self.get_val(Number(x_num / x_den)))
+                        let x_num = self.eval(xs[0], vars, env)?.get_number().unwrap();
+                        let x_den = self.eval(*x, vars, env)?.get_number().unwrap();
+                        let result = self.get_val(Number(x_num / x_den));
+                        env.insert(expr.clone(), result);
+                        Ok(result)
                     }
                     Val(Div(xs)) => {
                         assert_eq!(xs.len(), 0);
@@ -256,7 +277,7 @@ impl<'a> Evaluator<'a> {
                     }
                     Val(Nil) => Ok(self.get_val(True(vec![]))),
                     Val(IsNil) => {
-                        let e = self.eval(*x, env)?;
+                        let e = self.eval(*x, vars, env)?;
                         match e {
                             Val(Nil) => Ok(self.get_val(True(vec![]))),
                             Val(Cons(_)) => Ok(self.get_val(False(vec![]))),
@@ -265,14 +286,16 @@ impl<'a> Evaluator<'a> {
                     }
                     // Less
                     Val(Less(xs)) if xs.len() == 1 => {
-                        let x0 = self.eval(xs[0], env)?.get_number().unwrap();
-                        let x1 = self.eval(*x, env)?.get_number().unwrap();
+                        let x0 = self.eval(xs[0], vars, env)?.get_number().unwrap();
+                        let x1 = self.eval(*x, vars, env)?.get_number().unwrap();
 
-                        if x0 < x1 {
-                            Ok(self.get_val(True(vec![])))
+                        let result = if x0 < x1 {
+                            self.get_val(True(vec![]))
                         } else {
-                            Ok(self.get_val(False(vec![])))
-                        }
+                            self.get_val(False(vec![]))
+                        };
+                        env.insert(expr.clone(), result);
+                        Ok(result)
                     }
                     Val(Less(xs)) => {
                         assert_eq!(xs.len(), 0);
@@ -281,14 +304,16 @@ impl<'a> Evaluator<'a> {
                     }
                     // BigEq
                     Val(BigEq(xs)) if xs.len() == 1 => {
-                        let x0 = self.eval(xs[0], env)?.get_number().unwrap();
-                        let x1 = self.eval(*x, env)?.get_number().unwrap();
+                        let x0 = self.eval(xs[0], vars, env)?.get_number().unwrap();
+                        let x1 = self.eval(*x, vars, env)?.get_number().unwrap();
 
-                        if x0 == x1 {
-                            Ok(self.get_val(True(vec![])))
+                        let result = if x0 == x1 {
+                            self.get_val(True(vec![]))
                         } else {
-                            Ok(self.get_val(False(vec![])))
-                        }
+                            self.get_val(False(vec![]))
+                        };
+                        env.insert(expr.clone(), result);
+                        Ok(result)
                     }
                     Val(BigEq(xs)) => {
                         assert_eq!(xs.len(), 0);
@@ -319,7 +344,7 @@ impl<'a> Evaluator<'a> {
 mod test {
     use super::*;
 
-    fn empty_env<'a>() -> HashMap<ExprNode<'a>, (bool, ExprNode<'a>)> {
+    fn empty_env<'a>() -> HashMap<i128, ExprNode<'a>> {
         HashMap::new()
     }
 
@@ -328,7 +353,7 @@ mod test {
         let eval = Evaluator::new();
         // ap ap div -5 3   =   -1
         let exp = eval.div(eval.get_number(-5), eval.get_number(3));
-        let e = eval.eval(exp, &mut empty_env()).unwrap();
+        let e = eval.eval2(exp, &empty_env()).unwrap();
         assert_eq!(e, eval.get_number(-1))
     }
 
@@ -336,13 +361,12 @@ mod test {
     fn test_variable_func() {
         use TypedExpr::*;
         use TypedSymbol::*;
-        let eval = Evaluator::new();
+        let mut eval = Evaluator::new();
         // var1 = cons
         // ap ap cons 0 ap ap var1 1 2
         let mut env = HashMap::new();
-        let k = eval.get_val(Variable(1));
         let v = eval.get_val(Cons(vec![]));
-        env.insert(k, (false, v));
+        env.insert(1, v);
         let v1 = eval.get_val(Variable(1));
         let n1 = eval.get_number(1);
         let e2 = eval.get_app(v1, n1);
@@ -355,20 +379,19 @@ mod test {
         let tmp2 = eval.get_app(tmp, n2);
         let expected = Val(Cons(vec![n0, tmp2]));
 
-        assert_eq!(&expected, eval.eval(&e, &mut env).unwrap());
+        assert_eq!(&expected, eval.eval2(&e, &env).unwrap());
     }
 
     #[test]
     fn test_comb_b() {
         // B neg neg x = x
         for x in -3..4 {
-            let eval = Evaluator::new();
+            let mut eval = Evaluator::new();
             let expr = eval.get_app(
                 eval.get_app(eval.get_app(BCOMB, NEG), NEG),
                 eval.get_number(x),
             );
-            let mut env = HashMap::new();
-            assert_eq!(eval.get_number(x), eval.eval(&expr, &mut env).unwrap());
+            assert_eq!(eval.get_number(x), eval.eval2(&expr, &empty_env()).unwrap());
         }
     }
 
@@ -379,13 +402,23 @@ mod test {
             let eval = Evaluator::new();
             let expr = eval.get_app(ICOMB, NEG);
             let mut env = HashMap::new();
-            assert_eq!(NEG, eval.eval(&expr, &mut env).unwrap());
+            assert_eq!(NEG, eval.eval(&expr, &mut env, &mut HashMap::new()).unwrap());
         }
         {
-            let eval = Evaluator::new();
+            let mut eval = Evaluator::new();
             let expr = eval.get_app(ICOMB, BCOMB);
             let mut env = HashMap::new();
-            assert_eq!(BCOMB, eval.eval(&expr, &mut env).unwrap());
+            assert_eq!(BCOMB, eval.eval2(&expr, &mut env).unwrap());
         }
+    }
+
+    #[test]
+    fn test_cons_app() {
+        let eval = Evaluator::new();
+        let n1 = eval.get_number(1);
+        let n2 = eval.get_number(2);
+        let expr1 = eval.get_cons(n1, n2);
+        let e = eval.eval2(expr1, &empty_env());
+        assert_eq!(e, expr1);
     }
 }
