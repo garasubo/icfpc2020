@@ -43,7 +43,7 @@ impl<'a> Task<'a> {
 
     // Currently, it works only when target statement doesn't contain any variable
     pub fn solve(&'a self) -> ExprNode<'a> {
-        let mut env = self
+        let env = self
             .variable_to_expr_map
             .iter()
             .map(|(k, v)| {
