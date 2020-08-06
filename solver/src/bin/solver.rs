@@ -45,7 +45,7 @@ fn run() -> std::io::Result<()> {
 
     let task = Task::new(&lines[..]);
     let final_expr = task.solve();
-    println!("{:?}", final_expr);
+    // println!("{:?}", final_expr);
     Ok(())
 }
 
