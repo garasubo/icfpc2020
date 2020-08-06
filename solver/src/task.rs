@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::eval::Evaluator;
 use crate::expr;
@@ -6,6 +6,7 @@ use crate::expr::Expr;
 use crate::symbol::Symbol;
 use crate::typing::TypedSymbol;
 use crate::typing::{ExprNode, TypedExpr};
+use std::time::Instant;
 
 pub struct Task<'a> {
     pub variable_to_expr_map: HashMap<i128, Expr>,
@@ -43,15 +44,20 @@ impl<'a> Task<'a> {
 
     // Currently, it works only when target statement doesn't contain any variable
     pub fn solve(&'a self) -> ExprNode<'a> {
-        let env = self
+        let start = Instant::now();
+        let mut env = HashMap::new();
+
+        self
             .variable_to_expr_map
             .iter()
-            .map(|(k, v)| {
+            .for_each(|(k, v)| {
                 let v = self.evaluator.typing(&v).unwrap();
-                (*k, v)
-            })
-            .collect();
+                let v = self.evaluator.optimize(v, &env, &mut HashSet::new()).unwrap();
+                env.insert(*k, v);
+            });
         let target_expr = self.evaluator.typing(&self.target).unwrap();
+        let end = start.elapsed();
+        println!("setup env: {} ms", end.as_millis());
         self.evaluator.eval2(target_expr, &env).unwrap()
     }
 

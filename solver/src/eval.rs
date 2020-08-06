@@ -1,9 +1,10 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::eval::static_expr::*;
 use crate::expr::Expr;
 use crate::typing::*;
 use typed_arena::Arena;
+use std::time::Instant;
 
 #[derive(Debug)]
 pub enum EvalError<'a> {
@@ -81,6 +82,7 @@ impl<'a> Evaluator<'a> {
                     .map(|&x| {
                         let e = self.eval(x, vars, env).unwrap();
                         let result = self.peel(e, vars, env).unwrap();
+                        // env.insert(x, result);
                         result
                     })
                     .collect();
@@ -103,9 +105,103 @@ impl<'a> Evaluator<'a> {
         vars: &HashMap<i128, ExprNode<'a>>,
     ) -> Result<ExprNode, EvalError> {
         let mut env = HashMap::new();
+        let start = Instant::now();
+        let expr = self.optimize(expr, vars, &mut HashSet::new())?;
+        println!("optimize expr: {} ms", start.elapsed().as_millis());
         let expr = self.eval(expr, vars, &mut env)?;
+        println!("eval expr: {} ms", start.elapsed().as_millis());
         // println!("{}", env.keys().len());
-        self.peel(expr, vars, &mut env)
+        let result = self.peel(expr, vars, &mut env);
+        println!("peel expr: {} ms", start.elapsed().as_millis());
+        result
+    }
+
+    pub fn optimize(
+        &'a self,
+        expr: ExprNode<'a>,
+        vars: &HashMap<i128, ExprNode<'a>>,
+        used: &mut HashSet<i128>,
+    ) -> Result<ExprNode, EvalError> {
+        use TypedExpr::*;
+        use TypedSymbol::*;
+
+        match expr {
+            Val(Variable(i)) => {
+                if let Some(body) = vars.get(i) {
+                    Ok(body)
+                } else if used.contains(i) {
+                    Ok(expr)
+                } else {
+                    used.insert(*i);
+                    self.optimize(expr, vars, used)
+                }
+            },
+            Val(_) => Ok(expr),
+            Apply(f, x0) => {
+                let func = self.optimize(f, vars, used)?;
+                let x = self.optimize(x0, vars, used)?;
+                match func {
+                    Val(IComb) => Ok(x),
+                    Val(Neg) => {
+                        if let Val(Number(i)) = x {
+                            Ok(self.get_number(-*i))
+                        } else {
+                            Ok(expr)
+                        }
+                    }
+                    Val(Nil) => {
+                        Ok(T)
+                    }
+                    Val(_) => {
+                        Ok(expr)
+                    }
+                    Apply(Val(Sum(xs)), Val(Number(i))) if xs.len() == 0 => {
+                        if let Val(Number(j)) = x {
+                            Ok(self.get_number(i+j))
+                        } else {
+                            Ok(expr)
+                        }
+                    }
+                    Apply(Val(Div(xs)), Val(Number(i))) if xs.len() == 0 => {
+                        if let Val(Number(j)) = x {
+                            Ok(self.get_number(i/j))
+                        } else {
+                            Ok(expr)
+                        }
+                    }
+                    Apply(Val(Prod(xs)), Val(Number(i))) if xs.len() == 0 => {
+                        if let Val(Number(j)) = x {
+                            Ok(self.get_number(i*j))
+                        } else {
+                            Ok(expr)
+                        }
+                    }
+                    Apply(Val(Less(xs)), Val(Number(i))) if xs.len() == 0 => {
+                        if let Val(Number(j)) = x {
+                            if i < j {
+                                Ok(T)
+                            } else {
+                                Ok(F)
+                            }
+                        } else {
+                            Ok(expr)
+                        }
+                    }
+                    Apply(Val(BigEq(xs)), Val(Number(i))) if xs.len() == 0 => {
+                        if let Val(Number(j)) = x {
+                            if i == j {
+                                Ok(T)
+                            } else {
+                                Ok(F)
+                            }
+                        } else {
+                            Ok(expr)
+                        }
+                    }
+                    _ => Ok(expr)
+                }
+            }
+        }
     }
 
     fn eval(
