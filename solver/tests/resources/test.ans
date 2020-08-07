@@ -1,1 +1,1 @@
-Val(Cons([Val(Number(7)), Val(Cons([Val(Number(10880)), Val(Nil)]))]))
+List(Val(Number(7)), List(Val(Number(10880)), Val(Nil)))

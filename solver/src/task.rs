@@ -57,7 +57,7 @@ impl<'a> Task<'a> {
             });
         let target_expr = self.evaluator.typing(&self.target).unwrap();
         let end = start.elapsed();
-        println!("setup env: {} ms", end.as_millis());
+        eprintln!("setup env: {} ms", end.as_millis());
         self.evaluator.eval2(target_expr, &env).unwrap()
     }
 
